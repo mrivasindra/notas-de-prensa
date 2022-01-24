@@ -1,0 +1,718 @@
+<?php
+
+/**
+ * @file
+ * Code for the Indra buscadores feature.
+ */
+include_once 'indra_buscadores.features.inc';
+
+/**
+ * Implementa hook_block_info()
+ */
+function indra_buscadores_block_info() {
+  $blocks = array();
+  $blocks['buscador_notas_prensa'] = array(
+    'info' => 'Buscador notas prensa solr',
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['buscador_eventos'] = array(
+    'info' => 'Buscador de eventos solr',
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['buscador_medios'] = array(
+    'info' => 'Buscador en los medios solr',
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  $blocks['buscador_proyecto_innovacion'] = array(
+    'info' => 'Buscador proyectos de innovación solr',
+    'cache' => DRUPAL_NO_CACHE,
+  );
+  return $blocks;
+}
+
+/**
+ * Implementa hook_block_view()
+ */
+function indra_buscadores_block_view($delta = '') {
+  $block = array();
+  switch ($delta) {
+    case 'buscador_notas_prensa':
+      $block['subject'] = t('News finder');
+      $block['content'] = drupal_get_form('buscador_prensa_form');
+      break;
+    case 'buscador_eventos':
+      $block['subject'] = t('Events finder');
+      $block['content'] = drupal_get_form('buscador_prensa_form', 'prensa/eventos');
+      break;
+    case 'buscador_medios':
+      $block['subject'] = t('Finder Indra in the media');
+      $block['content'] = drupal_get_form('buscador_prensa_form', 'prensa/en-los-medios');
+      break;
+    case 'buscador_proyecto_innovacion':
+//            $block['subject'] = t('Finder Indra innovation proyects');
+      $block['content'] = drupal_get_form('buscador_proyecto_innovacion_form', 'indra/proyectos');
+      break;
+  }
+  return $block;
+}
+
+/**
+ * Retorna array de objtetos del tipo de la entidad pasada.
+ * @param string $entity_type  tipo
+ * @param string $vocabulary bandle
+ * @return array
+ */
+function _entity_load_by_bundle($entity_type, $vocabulary) {
+  $query = new EntityFieldQuery();
+
+  $query->entityCondition('entity_type', $entity_type)
+      ->entityCondition('bundle', $vocabulary);
+
+  $result = $query->execute();
+  if (!empty($result)) {
+    $entities = entity_get_controller($entity_type)->load(array_keys($result[$entity_type]));
+  }
+
+  return $entities;
+}
+
+/**
+ * Formulario de búsqueda para prensa.
+ * Implementa hook_form()
+ *
+ * @param array $form
+ * @param array $form_state
+ * @param strig $goto
+ * @return array
+ */
+function buscador_prensa_form($form, &$form_state, $goto = "prensa/notas-de-prensa") {
+//metadata
+  //$form['goto'] = array('#type' => 'value', '#value' => $goto);
+  $lenght = 50;
+  $date_from = isset($_SESSION['buscador_prensa_form']['date_from']) ? substr($_SESSION['buscador_prensa_form']['date_from'], 0, $lenght) : '';
+  $date_to = isset($_SESSION['buscador_prensa_form']['date_to']) ? substr($_SESSION['buscador_prensa_form']['date_to'], 0, $lenght) : '';
+
+  $form['goto'] = array(
+    '#type' => 'hidden',
+    '#default_value' => $goto,
+  );
+  if($goto === 'prensa/notas-de-prensa' || $goto === 'prensa/en-los-medios'){
+    $form['date_from'] = array(
+      '#type' => 'date_popup',
+      '#title' => t('From'),
+      '#default_value' => $date_from,
+      '#date_format' => 'Y-m-d',
+      '#weight' => -25,
+      '#element_validate' => array('indra_helper_validate_lenght'),
+      '#maxlength' => $lenght,
+      '#datepicker_options' => array(
+        'maxDate' => '+0',
+        'minDate' => '2007-1-1',
+      ),
+    );
+    $form['date_to'] = array(
+      '#type' => 'date_popup',
+      '#title' => t('Until'),
+      '#default_value' => $date_to,
+      '#date_format' => 'Y-m-d',
+      '#weight' => -20,
+      '#element_validate' => array('indra_helper_validate_lenght'),
+      '#maxlength' => $lenght,
+      '#datepicker_options' => array(
+        'maxDate' => '0',
+        'minDate' => '2007-1-1',
+      ),
+    );
+  }elseif ($goto === 'prensa/eventos'){
+    $form['date_from'] = array(
+      '#type' => 'date_popup',
+      '#title' => t('From'),
+      '#default_value' => $date_from,
+      '#date_format' => 'Y-m-d',
+      '#weight' => -25,
+      '#element_validate' => array('indra_helper_validate_lenght'),
+      '#maxlength' => $lenght,
+      '#datepicker_options' => array(
+        'maxDate' => '+1 year',
+        'minDate' => '-1 year',
+      ),
+    );
+    $form['date_to'] = array(
+      '#type' => 'date_popup',
+      '#title' => t('Until'),
+      '#default_value' => $date_to,
+      '#date_format' => 'Y-m-d',
+      '#weight' => -20,
+      '#element_validate' => array('indra_helper_validate_lenght'),
+      '#maxlength' => $lenght,
+      '#datepicker_options' => array(
+        'maxDate' => '+1 year',
+        'minDate' => '-1 year',
+      ),
+    );
+  }
+
+  $terms = _entity_load_by_bundle('taxonomy_term', 'pais');
+  $options = array(0 => "");
+
+  /* [2979] => America
+    [2978] => Europe
+    [2981] => Asia, Pacific
+    [3550] => Africa and Middle East
+   */
+  $zone = array(2979, 2978, 2981, 3550);
+
+  foreach ($terms as $term) {
+    if (in_array($term->tid, $zone)) {
+      continue;
+    }
+    $tid = $term->tid;
+    $options[$tid] = i18n_string_translate("taxonomy:term:$tid:name", $term->name);
+  }
+  asort($options);
+  $form['pais'] = array(
+    '#type' => 'select',
+    '#title' => t('Country'),
+    '#options' => $options,
+    '#default_value' => (int) isset($_SESSION['buscador_prensa_form']['pais']) ? $_SESSION['buscador_prensa_form']['pais'] : 0,
+  );
+
+  if ($goto === 'prensa/en-los-medios') {
+    $form['media'] = array(
+      '#type' => 'select',
+      '#title' => t('Media'),
+      '#options' => indra_buscadores_get_options_media(),
+      '#default_value' => (int) isset($_SESSION['buscador_prensa_form']['media']) ? $_SESSION['buscador_prensa_form']['media'] : 0,
+    );
+  }
+  $form['search_box'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Key words'),
+    '#default_value' => isset($_SESSION['buscador_prensa_form']['search_box']) ? $_SESSION['buscador_prensa_form']['search_box'] : '',
+    '#element_validate' => array('indra_helper_validate_lenght'),
+    '#maxlength' => 256,
+  );
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Search'), '#weight' => 100);
+
+  if (isset($_SESSION['buscador_prensa_form'])) {
+    unset($_SESSION['buscador_prensa_form']);
+  }
+
+  return $form;
+}
+
+/**
+ * Formulario de búsqueda para proyectos de innovación.
+ * Implementa hook_form()
+ *
+ * @param array $form
+ * @param array $form_state
+ * @param strig $goto
+ * @return array
+ */
+function buscador_proyecto_innovacion_form($form, &$form_state, $goto = "indra/proyectos") {
+  $form['goto'] = array(
+    '#type' => 'hidden',
+    '#default_value' => $goto,
+  );
+
+  // Programa
+  $program = taxonomy_get_tree(24); //programa_innovacion
+  $options = array(0 => "");
+  foreach ($program as $term) {
+    $tid = $term->tid;
+    $options[$tid] = i18n_string_translate("taxonomy:term:$tid:name", $term->name);
+  }
+  asort($options);
+  $form['program'] = array(
+    '#type' => 'select',
+    '#title' => t('Program'),
+    '#options' => $options,
+    '#default_value' => (int) isset($_SESSION['buscador_proyecto_innovacion_form']['program']) ? $_SESSION['buscador_proyecto_innovacion_form']['program'] : 0,
+    '#weight' => 1,
+  );
+  // financiado por
+  $financed = taxonomy_get_tree(22); //fuente_financiacion
+  $options = array(0 => "");
+  foreach ($financed as $term) {
+    $tid = $term->tid;
+    $options[$tid] = i18n_string_translate("taxonomy:term:$tid:name", $term->name);
+  }
+  asort($options);
+  $form['financed'] = array(
+    '#type' => 'select',
+    '#title' => t('Financed by'),
+    '#options' => $options,
+    '#default_value' => (int) isset($_SESSION['buscador_proyecto_innovacion_form']['financed']) ? $_SESSION['buscador_proyecto_innovacion_form']['financed'] : 0,
+    '#weight' => 2,
+  );
+
+  // sector
+  $sector = taxonomy_get_tree(2, 1290); //seccion, sector
+  $options = array(0 => "");
+  foreach ($sector as $term) {
+    $tid = $term->tid;
+    $options[$tid] = i18n_string_translate("taxonomy:term:$tid:name", $term->name);
+  }
+  asort($options);
+  $form['section'] = array(
+    '#type' => 'select',
+    '#title' => t('Section'),
+    '#options' => $options,
+    '#default_value' => (int) isset($_SESSION['buscador_proyecto_innovacion_form']['section']) ? $_SESSION['buscador_proyecto_innovacion_form']['section'] : 0,
+    '#weight' => 3,
+  );
+
+  // ONU
+  $vid = taxonomy_vocabulary_machine_name_load('objetivos_onu')->vid;
+  $onu = taxonomy_get_tree($vid); //objetivos_onu
+  $options = array(0 => "");
+  foreach ($onu as $term) {
+    $tid = $term->tid;
+    $options[$tid] = i18n_string_translate("taxonomy:term:$tid:name", $term->name);
+  }
+  asort($options);
+  $form['onu'] = array(
+    '#type' => 'select',
+    '#title' => '(*) ' . t('ONU Sustainable Development Goals'),
+    '#options' => $options,
+    '#default_value' => (int) isset($_SESSION['buscador_proyecto_innovacion_form']['onu']) ? $_SESSION['buscador_proyecto_innovacion_form']['onu'] : 0,
+    '#weight' => 4,
+  );
+
+  // palabras claves
+  $form['search_box'] = array(
+    '#type' => 'textfield',
+    '#title' => t('Key words'),
+    '#default_value' => isset($_SESSION['buscador_proyecto_innovacion_form']['search_box']) ? $_SESSION['buscador_proyecto_innovacion_form']['search_box'] : '',
+    '#element_validate' => array('indra_helper_validate_lenght'),
+    '#maxlength' => 256,
+    '#weight' => 5,
+  );
+
+  $form['submit'] = array('#type' => 'submit', '#value' => t('Search'), '#weight' => 6);
+
+  $form['contact_information'] = array(
+    '#markup' => '<div style="clear:both;">(*) ' . t('Select this filter to retrieve projects that are aligned with one of the ')
+    . l(t('ONU Sustainable Development Goals.'), 'http://www.un.org/sustainabledevelopment/es/objetivos-de-desarrollo-sostenible')
+    . '</div>',
+    '#weight' => 7,
+  );
+
+
+  if (isset($_SESSION['buscador_proyecto_innovacion_form'])) {
+    unset($_SESSION['buscador_proyecto_innovacion_form']);
+  }
+
+  return $form;
+}
+
+/**
+ * Transforma el string $fecha en un formato válido para solr.
+ * @param string $fecha
+ * @return string
+ */
+function buscador_solr_valid_date($fecha = NULL) {
+  if ((isset($fecha['date']) && !$fecha['date']) || !$fecha) {
+    return '*';
+  }
+  try {
+    $date = new DateTime($fecha);
+  } catch (Exception $e) {
+    watchdog('buscador_prensa_form', 'The date format is not correto.  "%error".', array('%error' => $e->getMessage()), WATCHDOG_WARNING);
+    return '*';
+  }
+  return $date->format('Y-m-d\TH:i:s\Z');
+}
+
+/**
+ * Envío del formulario
+ * @param array $form
+ * @param array $form_state
+ */
+function buscador_prensa_form_submit($form, &$form_state) {
+  if (isset($_SESSION['buscador_prensa_form'])) {
+    unset($_SESSION['buscador_prensa_form']);
+  }
+
+  $hc_url = $form_state['values']['goto'];
+
+  $query = array('fq' => array());
+  // caja de busqueda
+  if (empty($form_state['values']['search_box'])) {
+    $url = $hc_url . '/*';
+  }
+  else {
+    $_SESSION['buscador_prensa_form']['search_box'] = $form_state['values']['search_box'];
+    $params = explode(" ", $form_state['values']['search_box']);
+    foreach ($params as $id => $param) {
+      $params[$id] = trim(urlencode($param));
+    }
+    $params = implode("%20 AND %20", $params);
+    $url = $hc_url . '/' . $params;
+  }
+  //fechas
+  $date_from = buscador_solr_valid_date($form_state['values']['date_from']);
+  $date_to = buscador_solr_valid_date($form_state['values']['date_to']);
+  //$date_to = isset($_SESSION['buscador_prensa_form']['date_to']) ? substr($_SESSION['buscador_prensa_form']['date_to'], 0, $lenght) : date('Y-m-d','+1 year');
+  if ($date_from != '*' || $date_to != '*') {
+    if ($date_to != '*') {
+      // se necesita añadir un día ya que las horas se devuelven sobre la fecha pero a las 00:00
+      $date_to = DateTime::createFromFormat('Y-m-d\TH:i:s\Z', $date_to)->modify('+1 day')->format('Y-m-d\TH:i:s\Z');
+//      $date_to = $new_date->format('Y-m-d\TH:i:s\Z');
+    }
+    if ($hc_url === 'prensa/eventos') {
+      if ($date_from !== '*') {
+        $date_from = DateTime::createFromFormat('Y-m-d\TH:i:s\Z', $date_from)->modify('-1 day')->format('Y-m-d\TH:i:s\Z');
+      }
+      if ($date_to !== '*') {
+        $date_to = DateTime::createFromFormat('Y-m-d\TH:i:s\Z', $date_to)->modify('-1 day')->format('Y-m-d\TH:i:s\Z');
+      }
+      $query['fq'][] = 'dm_field_fechahora_rango:[' . $date_from . ' TO ' . $date_to . ']';
+      $query['fq'][] = 'dm_field_fechahora_rango_end:[' . $date_from . ' TO ' . $date_to . ']';
+    }
+    else {
+      $query['fq'][] = 'dm_field_fechahora:[' . $date_from . ' TO ' . $date_to . ']';
+    }
+    $_SESSION['buscador_prensa_form']['date_from'] = $form_state['values']['date_from'];
+    $_SESSION['buscador_prensa_form']['date_to'] = $form_state['values']['date_to'];
+
+  }
+  //pais
+  if (isset($form_state['values']['pais']) && $form_state['values']['pais'] > 0) {
+    $query['fq'][] = 'sm_field_pais:taxonomy_term:' . $form_state['values']['pais'];
+    $_SESSION['buscador_prensa_form']['pais'] = $form_state['values']['pais'];
+  }
+  //media
+  if (isset($form_state['values']['media']) && $form_state['values']['media'] > 0) {
+    $query['fq'][] = 'sm_field_medio_prensa:taxonomy_term:' . $form_state['values']['media'];
+    $_SESSION['buscador_prensa_form']['media'] = $form_state['values']['media'];
+  }
+
+  if (empty($query['fq'])) {
+    $opts = array();
+  }
+  else {
+    $opts = array('query' => $query);
+  }
+  $form_state['redirect'] = array($url, $opts);
+}
+
+/**
+ * Envío del formulario de proyectos de innovación
+ */
+function buscador_proyecto_innovacion_form_submit($form, &$form_state) {
+  if (isset($_SESSION['buscador_proyecto_innovacion_form'])) {
+    unset($_SESSION['buscador_proyecto_innovacion_form']);
+  }
+
+  $hc_url = $form_state['values']['goto'];
+
+  $query = array('fq' => array());
+  // caja de busqueda
+  if (empty($form_state['values']['search_box'])) {
+    $url = $hc_url . '/*';
+  }
+  else {
+    $_SESSION['buscador_proyecto_innovacion_form']['search_box'] = $form_state['values']['search_box'];
+    $params = explode(" ", $form_state['values']['search_box']);
+    foreach ($params as $id => $param) {
+      $params[$id] = urlencode($param);
+    }
+    $params = implode("%20", $params);
+    $url = $hc_url . '/' . $params;
+  }
+
+  //Programa
+  if (isset($form_state['values']['program']) && $form_state['values']['program'] > 0) {
+    $query['fq'][] = 'sm_field_programas_innovacion:taxonomy_term:' . $form_state['values']['program'];
+    $_SESSION['buscador_proyecto_innovacion_form']['program'] = $form_state['values']['program'];
+  }
+  //Financiado por
+  if (isset($form_state['values']['financed']) && $form_state['values']['financed'] > 0) {
+    $query['fq'][] = 'sm_field_financiado_por:taxonomy_term:' . $form_state['values']['financed'];
+    $_SESSION['buscador_proyecto_innovacion_form']['financed'] = $form_state['values']['financed'];
+  }
+  //Sección
+  if (isset($form_state['values']['section']) && $form_state['values']['section'] > 0) {
+    $query['fq'][] = 'sm_field_seccion_mult:taxonomy_term:' . $form_state['values']['section'];
+    $_SESSION['buscador_proyecto_innovacion_form']['section'] = $form_state['values']['section'];
+  }
+  //ONU
+  if (isset($form_state['values']['onu']) && $form_state['values']['onu'] > 0) {
+    $query['fq'][] = 'sm_field_onu_objetivos:taxonomy_term:' . $form_state['values']['onu'];
+    $_SESSION['buscador_proyecto_innovacion_form']['onu'] = $form_state['values']['onu'];
+  }
+
+  if (empty($query['fq'])) {
+    $opts = array();
+  }
+  else {
+    $opts = array('query' => $query);
+  }
+  $form_state['redirect'] = array($url, $opts);
+}
+
+// Eliminar del formulario las descripciones para el elemento date_popup
+function indra_buscadores_date_popup_process_alter(&$element, &$form_state, $context) {
+
+  unset($element['date']['#description']);
+  unset($element['date']['#title']);
+  unset($element['time']['#title']);
+  unset($element['time']['#description']);
+}
+
+/**
+ * Implementa hook_apachesolr_index_document_build();
+ */
+function indra_buscadores_apachesolr_index_document_build($document, $entity, $env_id) {
+  switch ($entity->type) {
+    case 'noticia':
+    case 'noticia_externa':
+      if (isset($entity->field_fechahora['und'][0]['value'])) {
+        $document->setField('ds_field_fechahora', indra_buscadores_apachesolr_date($entity->field_fechahora['und'][0]['value']), 'ds_field_fechahora');
+      }
+      break;
+    case 'evento':
+      $lang = isset($entity->field_fechahora_rango[$entity->language]) ? $entity->language : 'und';
+      if (isset($entity->field_fechahora_rango[$lang][0]['value'])) {
+        $document->setField('ds_field_fechahora_rango', indra_buscadores_apachesolr_date($entity->field_fechahora_rango[$lang][0]['value']), 'ds_field_fechahora_rango');
+      }
+      if (isset($entity->field_fechahora_rango[$lang][0]['value2'])) {
+        $document->setField('ds_field_fechahora_rango_end', indra_buscadores_apachesolr_date($entity->field_fechahora_rango[$lang][0]['value2']), 'ds_field_fechahora_rango_end');
+      }
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Implementa hook_query_alter();
+ * @global stdClass $language
+ * @param SolrBaseQuery $query
+ */
+function indra_buscadores_apachesolr_query_alter(SolrBaseQuery $query) {
+  $context = $query->getContext();
+  global $language;
+  $query->addFilter("ss_language", $language->language);
+
+  switch ($context['page_id']) {
+    case 'buscador_eventos':
+      $query->addParam('fl', 'dm_field_fechahora_rango');
+      $query->addParam('fl', 'dm_field_fechahora_rango_end');
+      $query->addParam('fl', 'ds_field_fechahora_rango');
+      $query->addParam('fl', 'ds_field_fechahora_rango_end');
+      $query->addParam('fl', 'sm_field_organiza');
+      $query->addParam('fl', 'sm_field_lugar');
+      $query->addParam('fl', 'sm_field_audiencia');
+      $query->addParam('fl', 'sm_field_participacion_indra');
+      if ('prensa/eventos/*' == current_path() && !isset($_GET['fq'])) {
+        $query->addParam('fq', 'dm_field_fechahora_rango:[NOW-1DAY TO *]');
+      }
+      $query->setAvailableSort('ds_field_fechahora_rango', array('title' => t('Date hour'), 'default' => 'desc'));
+      $query->addParam('sort', 'ds_field_fechahora_rango asc');
+      break;
+    case 'buscador_medios':
+      $query->addParam('fl', 'sm_field_tipo_medio');
+      $query->addParam('fl', 'sm_field_medio_prensa');
+      $query->addParam('fl', 'sm_field_pais');
+      $query->addParam('fl', 'dm_field_fechahora');
+      $query->setAvailableSort('ds_field_fechahora', array('title' => t('Date hour'), 'default' => 'desc'));
+      $query->addParam('sort', 'ds_field_fechahora desc');
+      break;
+    case 'buscador_notas_prensa':
+      $query->addParam('fl', 'sm_field_pais');
+      $query->addParam('fl', 'dm_field_fechahora');
+      $query->setAvailableSort('ds_field_fechahora', array('title' => t('Date hour'), 'default' => 'desc'));
+      $query->addParam('sort', 'ds_field_fechahora desc');
+      break;
+    case 'indra_proyectos_innovacion':
+      $query->addParam('fl', 'sm_field_financiado_por');
+      $query->addParam('fl', 'sm_field_seccion_mult');
+      $query->addParam('fl', 'sm_field_programas_innovacion');
+      $query->addParam('fl', 'sm_field_onu_objetivos');
+      break;
+    default:
+      break;
+  }
+}
+
+/**
+ * Implementa hook_apachesolr_process_results();
+ *
+ * @param array $results
+ *   The returned search results.
+ * @param DrupalSolrQueryInterface $query
+ *   The query for which we want to process the results from
+ */
+function indra_buscadores_apachesolr_process_results(array &$results, DrupalSolrQueryInterface $query) {
+  foreach ($results as $id => $result) {
+    //se carga el objeto correspondiente al tid de la taxonomía pais.
+    if (isset($results[$id]['fields']['sm_field_pais'][0])) {
+      $terms_pais = array();
+      foreach ($results[$id]['fields']['sm_field_pais'] as $key => $pais) {
+        $tid = explode('taxonomy_term:', $pais);
+        if (isset($terms_pais[$tid[1]])) {
+          $results[$id]['fields']['sm_field_pais'][$key] = $terms_pais[$tid[1]];
+        }
+        else {
+          $term = taxonomy_term_load($tid[1]);
+          $results[$id]['fields']['sm_field_pais'][$key] = $term;
+          $terms_pais[$tid[1]] = $term;
+        }
+      }
+    }
+    // se carga el término correspondite al tid de la taxonomía mediio
+    if (isset($results[$id]['fields']['sm_field_medio_prensa'][0])) {
+      $terms_medio = array();
+      foreach ($results[$id]['fields']['sm_field_medio_prensa'] as $key => $medio) {
+        $tid = explode('taxonomy_term:', $medio);
+        if (isset($terms_medio[$tid[1]])) {
+          $results[$id]['fields']['sm_field_medio_prensa'][$key] = $terms_medio[$tid[1]];
+        }
+        else {
+          $term = taxonomy_term_load($tid[1]);
+          $results[$id]['fields']['sm_field_medio_prensa'][$key] = $term;
+          $terms_medio[$tid[1]] = $term;
+        }
+      }
+    }
+    // se carga el término correspondite al tid de la taxonomía fuente_financiacion
+    if (isset($results[$id]['fields']['sm_field_financiado_por'][0])) {
+      $terms_financiado = array();
+      foreach ($results[$id]['fields']['sm_field_financiado_por'] as $key => $medio) {
+        $tid = explode('taxonomy_term:', $medio);
+        if (isset($terms_financiado[$tid[1]])) {
+          $results[$id]['fields']['sm_field_financiado_por'][$key] = $terms_financiado[$tid[1]];
+        }
+        else {
+          $term = taxonomy_term_load($tid[1]);
+          $results[$id]['fields']['sm_field_financiado_por'][$key] = $term;
+          $terms_financiado[$tid[1]] = $term;
+        }
+      }
+    }
+    // se carga el término correspondite al tid de la taxonomía sectores_negocio
+    if (isset($results[$id]['fields']['sm_field_seccion_mult'][0])) {
+      $terms_sect = array();
+      foreach ($results[$id]['fields']['sm_field_seccion_mult'] as $key => $medio) {
+        $tid = explode('taxonomy_term:', $medio);
+        if (isset($terms_sect[$tid[1]])) {
+          $results[$id]['fields']['sm_field_seccion_mult'][$key] = $terms_sect[$tid[1]];
+        }
+        else {
+          $term = taxonomy_term_load($tid[1]);
+          $results[$id]['fields']['sm_field_seccion_mult'][$key] = $term;
+          $terms_sect[$tid[1]] = $term;
+        }
+      }
+    }
+    // se cargan los documentos
+    if (isset($results[$id]['fields']['entity_id'])) {
+      $results[$id]['document'] = indra_helper_get_document($results[$id]['fields']['entity_id']);
+    }
+    // fecha evento
+    if (isset($results[$id]['fields']['dm_field_fechahora_rango'][0])) {
+      $fecha = DateTime::createFromFormat(DateTime::W3C, $results[$id]['fields']['dm_field_fechahora_rango'][0]);
+      $results[$id]['fields']['dm_field_fechahora_rango'][0] = $fecha->getTimestamp();
+    }
+    if (isset($results[$id]['fields']['dm_field_fechahora_rango_end'][0])) {
+      $fecha = DateTime::createFromFormat(DateTime::W3C, $results[$id]['fields']['dm_field_fechahora_rango_end'][0]);
+      $results[$id]['fields']['dm_field_fechahora_rango_end'][0] = $fecha->getTimestamp();
+    }
+    // fecha noticia
+    if (isset($results[$id]['fields']['dm_field_fechahora'][0])) {
+      $fecha = DateTime::createFromFormat(DateTime::W3C, $results[$id]['fields']['dm_field_fechahora'][0]);
+      $results[$id]['fields']['dm_field_fechahora'][0] = $fecha->getTimestamp();
+    }
+  }
+}
+
+/**
+ * Implementa hook_form_alter();
+ */
+function indra_buscadores_form_alter(&$form, &$form_state) {
+  if ($form['#form_id'] == 'search_form' ||
+      $form['#form_id'] == 'apachesolr_search_custom_page_search_form') {
+    $form['#validate'][] = 'indra_buscadores_validate';
+    $lenght = 254;
+    $form['lenght_value']['#value'] = $lenght;
+    if (isset($_REQUEST['keys']) && $lenght < strlen($_REQUEST['keys'])) {
+      $_REQUEST['keys'] = substr($_REQUEST['keys'], 0, $lenght);
+    }
+    if (isset($form['basic']['keys']['#default_value']) && $lenght < strlen($form['basic']['keys']['#default_value'])) {
+      $form['basic']['keys']['#default_value'] = substr($form['basic']['keys']['#default_value'], 0, $lenght);
+    }
+    $form['lenght_value']['#value'] = $lenght;
+  }
+  if ($form['#form_id'] == 'search_form') {
+    $form['#submit'][] = 'indra_buscadores_serch_form_submit';
+  }
+}
+
+/**
+ * @see indra_buscadores_form_search_form_alter()
+ */
+function indra_buscadores_validate(&$form, &$form_state) {
+  $field = array('#default_value', '#value', 'or', 'phrase', 'negative', 'keys', 'processed_keys', 'args');
+  $lenght = $form['lenght_value']['#value'];
+
+  foreach ($field as $key) {
+    if (isset($form['basic']['keys'][$key]) && $lenght < strlen($form['basic']['keys'][$key])) {
+      $form['basic']['keys'][$key] = substr($form['basic']['keys'][$key], 0, $lenght);
+    }
+    if (isset($form_state['input'][$key]) && $lenght < strlen($form_state['input'][$key])) {
+      $form_state['input'][$key] = substr($form_state['input'][$key], 0, $lenght);
+    }
+    if (isset($form_state['build_info'][$key][1]) && $lenght < strlen($form_state['build_info'][$key][1])) {
+      $form_state['build_info'][$key][1] = substr($form_state['build_info'][$key][1], 0, $lenght);
+    }
+    if (isset($form_state['values'][$key]) && $lenght < strlen($form_state['values'][$key])) {
+      $form_state['values'][$key] = substr($form_state['values'][$key], 0, $lenght);
+      form_set_error('keys', t('The search text can not exceed @lenght characters.', array('@lenght' => $lenght)));
+    }
+  }
+}
+
+/**
+ * Convierte la fecha a un formato válido para Solr.
+ * @param string $sdate
+ * @param string $name_field
+ * @return string
+ */
+function indra_buscadores_apachesolr_date($sdate, $field_name = '') {
+  try {
+    $date = new DateTime($sdate);
+    return $date->format('Y-m-d\TH:i:s\Z');
+  } catch (Exception $e) {
+    watchdog('apachesolr_index_document_build', 'Field name "%field":  -The date format is not correto.  "%error".', array('%error' => $e->getMessage(), '%field' => $field_name), WATCHDOG_WARNING);
+    return '';
+  }
+}
+
+/**
+ * Listada de opciones para el select tipo de medio
+ * @return array
+ */
+function indra_buscadores_get_options_media() {
+  $medias = views_get_view_result('sala_prensa', 'block_14');
+  $media_options = array(0 => "");
+
+  foreach ($medias as $media) {
+    $type = $media->field_field_tipo_medio[0]['rendered']['#label'] ?? false;
+    $media_id = $media->field_field_medio_prensa[0]['raw']['target_id'] ?? false;
+    $media_name = $media->field_field_medio_prensa[0]['rendered']['#label'] ?? '';
+
+    if ($type && $media_id) {
+      $media_options[$type][$media_id] = $media_name;
+    }
+  }
+  return $media_options;
+}
+
+function indra_buscadores_serch_form_submit(&$form, &$form_state) {
+  $keys = $form_state['values']['keys'];
+  drupal_goto('search/site/' . $keys);
+}
